@@ -151,7 +151,7 @@ def write_images(image_queue, filename_prefix):
 
 
             
-def capture_from_azure(k4a, filename_prefix, recording_length, display_frames=False, display_time=False):
+def capture_from_azure(k4a, filename_prefix, recording_length, display_frames=False, display_time=False, externally_triggered=False):
     
     image_queue = Queue()
     write_process = Process(target=write_images, args=(image_queue, filename_prefix))
@@ -162,7 +162,19 @@ def capture_from_azure(k4a, filename_prefix, recording_length, display_frames=Fa
         display_process = Process(target=display_images, args=(display_queue,))
         display_process.start()
         
-    k4a.start()
+    ii = 0
+    if externally_triggered:
+        while not k4a.is_running:
+            jack_in, jack_out = k4a.sync_jack_status
+            if jack_in:
+                k4a.start()
+            else:
+                ii += 1
+                if ii % 1000 == 0:
+                    print('Waiting for trigger to start...')
+    else:            
+        k4a.start()
+        
     system_timestamps = []
     device_timestamps = []
     start_time = time.time()
