@@ -164,14 +164,19 @@ def capture_from_azure(k4a, filename_prefix, recording_length, display_frames=Fa
         
     ii = 0
     if externally_triggered:
-        while not k4a.is_running:
-            jack_in, jack_out = k4a.sync_jack_status
-            if jack_in:
-                k4a.start()
-            else:
-                ii += 1
-                if ii % 1000 == 0:
-                    print('Waiting for trigger to start...')
+        print('opening device')
+        try:
+            k4a.open()
+            while not k4a.is_running:
+                jack_in, jack_out = k4a.sync_jack_status
+                if jack_in: 
+                    print('received trigger, starting device')
+                    k4a.start()
+                else:
+                    ii += 1
+                    if ii % 1000 == 0: print('Waiting for trigger to start...')
+        except:
+            if k4a.opened: k4a.close()
     else:            
         k4a.start()
         
