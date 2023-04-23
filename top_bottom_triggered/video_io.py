@@ -171,11 +171,11 @@ def capture_from_azure(k4a, filename_prefix, recording_length, display_frames=Fa
     
     try:
         while time.time()-start_time < recording_length:  
-            if count == 0:
+            if externally_triggered and count == 0:
                 print('awaiting first capture (trigger)...')
             capture = k4a.get_capture()
             if count == 0:
-                print('First frame captured (trigger received)')
+                print('First frame captured!')
                 start_time = time.time()
 
             if capture.depth is None: 
@@ -197,7 +197,7 @@ def capture_from_azure(k4a, filename_prefix, recording_length, display_frames=Fa
             count += 1
             
     except OSError:
-        print('Recording stopped early')
+        print('Recording stopped early due to OS error')
         
     finally:
         if not k4a.is_running and k4a.opened:
