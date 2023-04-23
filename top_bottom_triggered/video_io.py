@@ -151,7 +151,7 @@ def write_images(image_queue, filename_prefix):
 
 
             
-def capture_from_azure(k4a, filename_prefix, recording_length, display_frames=False, display_time=False):
+def capture_from_azure(k4a, filename_prefix, recording_length, display_frames=False, display_time=False, externally_triggered=False):
     
     image_queue = Queue()
     write_process = Process(target=write_images, args=(image_queue, filename_prefix))
@@ -163,6 +163,7 @@ def capture_from_azure(k4a, filename_prefix, recording_length, display_frames=Fa
         display_process.start()
         
     k4a.start()
+        
     system_timestamps = []
     device_timestamps = []
     start_time = time.time()
@@ -170,7 +171,13 @@ def capture_from_azure(k4a, filename_prefix, recording_length, display_frames=Fa
     
     try:
         while time.time()-start_time < recording_length:  
+            if externally_triggered and count == 0:
+                print('awaiting first capture (trigger)...')
             capture = k4a.get_capture()
+            if count == 0:
+                print('First frame captured!')
+                start_time = time.time()
+
             if capture.depth is None: 
                 print('Dropped frame')
                 continue
@@ -190,19 +197,22 @@ def capture_from_azure(k4a, filename_prefix, recording_length, display_frames=Fa
             count += 1
             
     except OSError:
-        print('Recording stopped early')
+        print('Recording stopped early due to OS error')
         
     finally:
-        k4a.stop()
-        system_timestamps = np.array(system_timestamps) 
-        np.save(filename_prefix+'.system_timestamps.npy',system_timestamps)
-        np.save(filename_prefix+'.device_timestamps.npy',device_timestamps)
-        print(' - Frame rate = ',len(system_timestamps) / (system_timestamps.max()-system_timestamps.min()))
+        if not k4a.is_running and k4a.opened:
+            k4a.close()
+        elif k4a.is_running:
+            k4a.stop()
+            system_timestamps = np.array(system_timestamps) 
+            np.save(filename_prefix+'.system_timestamps.npy',system_timestamps)
+            np.save(filename_prefix+'.device_timestamps.npy',device_timestamps)
+            print(' - Frame rate = ',len(system_timestamps) / (system_timestamps.max()-system_timestamps.min()))
 
-        image_queue.put(tuple())
-        write_process.join()
+            image_queue.put(tuple())
+            write_process.join()
 
-        if display_frames:
-            display_queue.put(tuple())
-            display_process.join()
+            if display_frames:
+                display_queue.put(tuple())
+                display_process.join()
             
