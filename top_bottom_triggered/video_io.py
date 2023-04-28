@@ -1,6 +1,7 @@
 import datetime, subprocess, numpy as np, time, sys,cv2
 from multiprocessing import Process, Queue
-
+from pyk4a.errors import K4AException, K4ATimeoutException
+import os
 
 def get_number_of_frames(filepath):
     command = 'C:\\ffmpeg\\bin\\ffprobe -v error -select_streams v:0 -show_entries stream=nb_frames -of default=nokey=1:noprint_wrappers=1'
@@ -149,70 +150,104 @@ def write_images(image_queue, filename_prefix):
             depth_pipe = write_frames(filename_prefix+'.depth.avi', depth.astype(np.uint16)[None,:,:], codec='ffv1', pixel_format='gray16', close_pipe=False, pipe=depth_pipe)
             ir_pipe = write_frames(filename_prefix+'.ir.avi', ir.astype(np.uint16)[None,:,:], codec='ffv1', pixel_format='gray16', close_pipe=False, pipe=ir_pipe)
 
-
             
-def capture_from_azure(k4a, filename_prefix, recording_length, display_frames=False, display_time=False, externally_triggered=False):
+def capture_from_azure(
+    k4a, 
+    filename_prefix, 
+    recording_length, 
+    display_frames=False, 
+    display_time=False, 
+    externally_triggered=False,
+    trigger_started_event=None,
+    interrupt_queue=None,
+):
     
+    # Start image saving queue + process
     image_queue = Queue()
     write_process = Process(target=write_images, args=(image_queue, filename_prefix))
     write_process.start()
     
-    if display_frames: 
+    # Start display process
+    if display_frames:
         display_queue = Queue()
         display_process = Process(target=display_images, args=(display_queue,))
         display_process.start()
         
+    # Prime the k4a. If in subordinate mode, will wait for triggers to begin capturing.
     k4a.start()
         
+    # Set some vars.
     system_timestamps = []
     device_timestamps = []
     start_time = time.time()
     count = 0
     
     try:
-        while time.time()-start_time < recording_length:  
+        while time.time()-start_time < recording_length: 
+
+            # Wait for first frame 
             if externally_triggered and count == 0:
                 print('awaiting first capture (trigger)...')
+
+            # This line looks for a packaged frame ("capture") from the azure.
+            # It will wait forever! So if you want to stop this process, you need to send at least one trigger before it will break (because it will just hang on this line without triggers).
+            # (Tried finessing it with timeouts but get weird C errors that aren't worth debugging)
             capture = k4a.get_capture()
+
+            # Report first frame
             if count == 0:
                 print('First frame captured!')
+                if trigger_started_event is not None: trigger_started_event.set()
                 start_time = time.time()
 
+            # Report dropped frames (dont need to store, will be implicit in device timestamps)
             if capture.depth is None: 
                 print('Dropped frame')
                 continue
             
+            # Iterate frame counter
+            count += 1
+
+            # Save timestamps
             system_timestamps.append(time.time())
             device_timestamps.append(capture.depth_timestamp_usec)
-
+            
+            # Save images
             depth = capture.depth.astype(np.int16)
             ir = capture.ir.astype(np.uint16)
             image_queue.put((ir,depth))
             
+            # Deal with display
             if display_frames and count % 2 == 0: 
                 display_queue.put((ir[::2,::2],))
-
             if display_time and count % 15 == 0: 
                 sys.stdout.write('\rRecorded '+repr(int(time.time()-start_time))+' out of '+repr(recording_length)+' seconds')
-            count += 1
+            
+            # Check if user requested to stop by placing something (anything) into the interrupt queue.
+            if (interrupt_queue is not None) and (not interrupt_queue.empty()):
+                print('Received interrupt request')
+                break
             
     except OSError:
         print('Recording stopped early due to OS error')
-        
+    
+    except:
+        print(f"Error for {os.path.split(filename_prefix)[1]} ")
+        raise
+    
     finally:
-        if not k4a.is_running and k4a.opened:
-            k4a.close()
-        elif k4a.is_running:
-            k4a.stop()
-            system_timestamps = np.array(system_timestamps) 
-            np.save(filename_prefix+'.system_timestamps.npy',system_timestamps)
-            np.save(filename_prefix+'.device_timestamps.npy',device_timestamps)
-            print(' - Frame rate = ',len(system_timestamps) / (system_timestamps.max()-system_timestamps.min()))
+        print()
+        print(f"Stopping process for {os.path.split(filename_prefix)[1]}")
+        k4a.stop()
+        system_timestamps = np.array(system_timestamps) 
+        np.save(filename_prefix+'.system_timestamps.npy',system_timestamps)
+        np.save(filename_prefix+'.device_timestamps.npy',device_timestamps)
+        print(' - Frame rate = ',len(system_timestamps) / (system_timestamps.max()-system_timestamps.min()))
 
-            image_queue.put(tuple())
-            write_process.join()
+        image_queue.put(tuple())
+        write_process.join()
 
-            if display_frames:
-                display_queue.put(tuple())
-                display_process.join()
-            
+        if display_frames:
+            display_queue.put(tuple())
+            display_process.join()
+        
