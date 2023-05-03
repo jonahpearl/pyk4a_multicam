@@ -1,6 +1,6 @@
 # pyk4a_multicam
 
-
+![Azure syncing setup](docs/azure_sync_setup_downscale.png)
 ## Installation
 
 Install [Anaconda](https://docs.anaconda.com/anaconda/install/index.html) or [Miniconda](https://docs.conda.io/en/latest/miniconda.html). Create and activate an environment called `top_bottom_triggered` with python=3.8:
