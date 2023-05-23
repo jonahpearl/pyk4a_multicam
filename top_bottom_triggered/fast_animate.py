@@ -5,7 +5,7 @@ import os
 import matplotlib.pyplot as plt
 import matplotlib
 import time
-from multiprocessing import Process, Queue
+from multiprocessing import Process, Queue, Event
 from queue import Empty
 
 class BlitManager:
@@ -80,6 +80,81 @@ class BlitManager:
             cv.blit(fig.bbox)
         # let the GUI event loop process anything it has to do
         cv.flush_events()
+
+class ThermistorAnimator():
+    def __init__(
+        self, 
+        n_samples, 
+        fs, 
+        show_opto=False,
+        opto_header_name=None,
+        q_downsample=15,
+    ):
+        self.nsamp = n_samples
+        self.show_opto = show_opto
+        self.opto_header_name = 'led' if opto_header_name is None else opto_header_name
+        
+        self.current_val = 0
+        self.data = np.zeros((n_samples,), dtype='float')
+        self.data_head_idx = 0  # to trace out data like an o-scope
+        
+        self.queue = Queue()
+        self.animator_exit_event = Event()
+        self.animate_process = main_from_ipynb(self.queue, n_samples, int(fs/q_downsample), self.animator_exit_event)
+        self.q_downsample_counter = 0
+        self.q_downsample = 15
+        
+    def extract_indices_from_header(self, header):
+        self.therm_idx = [i for i,val in enumerate(header.split(',')) if (val=='therm' or val=='thermistor')][0]
+        if self.show_opto:
+            self.opto_idx = [i for i,val in enumerate(header.split(',')) if val==self.opto_header_name][0]
+        self.led_idxs = [i for i,val in enumerate(header.split(',')) if 'led' in val]
+                 
+    def start(self):
+        if not self.animate_process.is_alive():
+            self.animate_process.start()
+            
+    def update(self, line):
+        
+        # Extract data from correct index in line
+        self.current_val = np.array(line.split(',')[self.therm_idx], dtype='float')
+        
+        # Update vector
+        self.data[self.data_head_idx] = self.current_val
+
+        # Extract opto val if using
+        if self.show_opto:
+            opto_val = np.array(line.split(',')[self.opto_idx], dtype='float')
+
+            # TODO
+            # Show inhales and exhales in super janky way
+#                 if np.array(line.split(',')[8], dtype='int') == 1:
+#                     therm_data[data_head_idx] = 1000
+#                 elif np.array(line.split(',')[9], dtype='int') == 1:
+#                     therm_data[data_head_idx] = 0
+        
+    
+        # Delete the oldest data to make it o-scope-like
+        self.data[(self.data_head_idx+100) % self.nsamp] = np.nan
+        self.data_head_idx += 1
+        self.data_head_idx = self.data_head_idx % self.nsamp
+
+        # Increment downsample counter
+        self.q_downsample_counter += 1
+        self.q_downsample_counter = self.q_downsample_counter % self.q_downsample
+    
+        # Decide if sending to animator
+        if self.q_downsample_counter == 0:
+            sync_tup = tuple([line.split(',')[idx] for idx in self.led_idxs])
+            if self.show_opto:
+                self.queue.put((self.data, sync_tup, opto_val))
+            else:
+                self.queue.put((self.data, sync_tup, 0))
+    
+    def close(self):
+        self.animator_exit_event.set()
+        self.queue.close()
+        self.queue.cancel_join_thread()
 
 from time import sleep
 def test(exit):
