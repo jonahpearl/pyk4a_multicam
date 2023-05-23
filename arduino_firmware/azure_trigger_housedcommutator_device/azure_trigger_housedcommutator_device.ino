@@ -61,8 +61,10 @@ const int sync4_pin = 15;
 
 
 const int azure_trigger_pin = 17; // listens for azure trigger
-int trigger_count = 0;
-
+volatile int trigger_count = 0;
+const int led_min_delay_off_trigger_millis = 10;  // arbitrary number safely above ~6.4
+const int led_max_delay_off_trigger_millis = 28;  // arbitrary number safely below 33
+elapsedMillis sinceTrigger; // reset by every interrupt. unfortunately can't seem to make this volatile.
 
 // Thermistor Initializations
 Adafruit_MCP4725 dac;
@@ -89,7 +91,7 @@ String header = "time,led1,led2,led3,led4,yaw,roll,pitch,acc_x,acc_y,acc_z,therm
 unsigned long time;
 unsigned long previousMillis_sensor = 0; // will store last time the sensor was sampled
 unsigned long previousMillis_motor = 0; // will store last time the motor was updated
-unsigned long previousMillis_syncing = 0; // will store the last time the syncing pins were updated
+elapsedMillis sinceSync = 0; // will store the last time the syncing pins were updated
 unsigned long currentMillis = 0; // Stores current system time
 
 //Syncing variables
@@ -175,12 +177,12 @@ void setup() {
   digitalWrite(ttl2_pin, HIGH);
   digitalWrite(ttl3_pin, HIGH);
   digitalWrite(ttl4_pin, HIGH);
-  previousMillis_syncing = millis();
 
   pinMode(azure_trigger_pin, INPUT);
   digitalWrite(azure_trigger_pin, HIGH);
   attachInterrupt(digitalPinToInterrupt(azure_trigger_pin), countTriggerOne, RISING);
   
+  sinceSync = 0;
 }
 
 
@@ -202,9 +204,9 @@ void loop(void)
     Serial.print(",");
 
     // Run syncing loop:
-    if(currentMillis - previousMillis_syncing >= SYNCING_PERIOD) // Then its time to update the syncing pins!
+    if((sinceSync >= SYNCING_PERIOD) and (sinceTrigger >= led_min_delay_off_trigger_millis) and (sinceTrigger <= led_max_delay_off_trigger_millis)) // Then its time to update the syncing pins!
     {
-      previousMillis_syncing = currentMillis; // Only a few uS will have passed, so currentMillis is unchanged
+      sinceSync = sinceSync - SYNCING_PERIOD;
 
       // Generate random bit code
       bit1 = random(0,2);
@@ -404,6 +406,7 @@ void loop(void)
 
 void countTriggerOne()
 {
+  sinceTrigger = 0;
   trigger_count++;
 }
 
