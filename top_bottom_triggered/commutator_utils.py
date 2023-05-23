@@ -2,7 +2,7 @@ import numpy as np
 import serial
 import datetime as dt
 import os
-import struct
+
 import datetime as dt
 
 
@@ -98,45 +98,3 @@ def shuffle_by_date(lst, date=None, date_format=None):
 
 
 
-def packIntAsLong(value):
-    """Packs a python 4 byte integer to an arduino long
-    Parameters
-    ----------
-    value : int
-        A 4 byte integer
-    Returns
-    -------
-    packed : bytes
-        A 4 byte long
-    """
-    return struct.pack("i", value)
-
-def interrupt_sync_device(sync_device_port=None, sync_device=None):
-    if sync_device_port is not None and sync_device is not None:
-        raise ValueError('pass either port or device object')
-    elif sync_device_port is not None:
-        with serial.Serial(sync_device_port, baudrate=9600, timeout=0.1) as sync_device:
-            sync_device.write(b"i")
-            response = sync_device.readline().decode("utf-8")
-    elif sync_device is not None:
-        sync_device.write(b"i")
-        response = sync_device.readline().decode("utf-8")
-        
-    return response
-
-
-def unfreeze_azures(sync_device_port=None, sync_device=None):
-    """Send a short burst of triggers to the azures
-    """
-    num = b"".join([packIntAsLong(int(5))])
-    if sync_device_port is not None and sync_device is not None:
-        raise ValueError('pass either port or device object')
-    elif sync_device_port is not None:
-        with serial.Serial(sync_device_port, baudrate=9600, timeout=0.1) as sync_device:
-            sync_device.write(num)
-            response = sync_device.readline().decode("utf-8")
-    elif sync_device is not None:
-        sync_device.write(num)
-        response = sync_device.readline().decode("utf-8")
-        
-    return response
