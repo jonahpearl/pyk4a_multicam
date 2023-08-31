@@ -1,12 +1,10 @@
 import numpy as np
-import serial
-import datetime as dt
-import os
 import matplotlib.pyplot as plt
 import matplotlib
 import time
 from multiprocessing import Process, Queue, Event
 from queue import Empty
+
 
 class BlitManager:
 
@@ -81,44 +79,61 @@ class BlitManager:
         # let the GUI event loop process anything it has to do
         cv.flush_events()
 
+
 class ThermistorAnimator():
+    """Animates the thermistor signal (or any other signal you pass it) with mpl blitting
+    """
     def __init__(
-        self, 
-        n_samples, 
-        fs, 
+        self,
+        n_samples,
+        fs,
+        signal_header_name='therm',
+        signal_initial_yvals=None,
         show_opto=False,
         opto_header_name=None,
         q_downsample=15,
     ):
         self.nsamp = n_samples
+        self.signal_header_name = signal_header_name
+
         self.show_opto = show_opto
         self.opto_header_name = 'led' if opto_header_name is None else opto_header_name
-        
+
         self.current_val = 0
         self.data = np.zeros((n_samples,), dtype='float')
         self.data_head_idx = 0  # to trace out data like an o-scope
-        
+
         self.queue = Queue()
         self.animator_exit_event = Event()
-        self.animate_process = main_from_ipynb(self.queue, n_samples, int(fs/q_downsample), self.animator_exit_event)
+        self.animate_process = main_from_ipynb(
+            self.queue,
+            int(fs/q_downsample),
+            self.animator_exit_event,
+            n_samples=n_samples,
+            ylims=signal_initial_yvals
+        )
         self.q_downsample_counter = 0
         self.q_downsample = 15
-        
+
     def extract_indices_from_header(self, header):
-        self.therm_idx = [i for i,val in enumerate(header.split(',')) if (val=='therm' or val=='thermistor')][0]
+        if self.signal_header_name == 'therm':
+            self.therm_idx = [i for i, val in enumerate(header.split(',')) if (val == 'therm' or val == 'thermistor')][0]  # allow therm or thermistor for ease of cross-use
+        else:
+            self.therm_idx = [i for i, val in enumerate(header.split(',')) if val == self.signal_header_name][0]
         if self.show_opto:
-            self.opto_idx = [i for i,val in enumerate(header.split(',')) if val==self.opto_header_name][0]
-        self.led_idxs = [i for i,val in enumerate(header.split(',')) if 'led' in val]
-                 
+            self.opto_idx = [i for i, val in enumerate(header.split(',')) if val == self.opto_header_name][0]
+        self.led_idxs = [i for i, val in enumerate(header.split(',')) if 'led' in val]
+        # print(self.signal_header_name, self.therm_idx, self.led_idxs)  # DEBUG: ok
+
     def start(self):
         if not self.animate_process.is_alive():
             self.animate_process.start()
-            
+
     def update(self, line):
-        
+
         # Extract data from correct index in line
         self.current_val = np.array(line.split(',')[self.therm_idx], dtype='float')
-        
+
         # Update vector
         self.data[self.data_head_idx] = self.current_val
 
@@ -132,52 +147,48 @@ class ThermistorAnimator():
 #                     therm_data[data_head_idx] = 1000
 #                 elif np.array(line.split(',')[9], dtype='int') == 1:
 #                     therm_data[data_head_idx] = 0
-        
-    
+
         # Delete the oldest data to make it o-scope-like
-        self.data[(self.data_head_idx+100) % self.nsamp] = np.nan
+        self.data[(self.data_head_idx + int(self.nsamp/10)) % self.nsamp] = np.nan
         self.data_head_idx += 1
         self.data_head_idx = self.data_head_idx % self.nsamp
 
         # Increment downsample counter
         self.q_downsample_counter += 1
         self.q_downsample_counter = self.q_downsample_counter % self.q_downsample
-    
+
         # Decide if sending to animator
         if self.q_downsample_counter == 0:
             sync_tup = tuple([line.split(',')[idx] for idx in self.led_idxs])
+            if len(sync_tup) == 0:
+                sync_tup = (-1)
             if self.show_opto:
                 self.queue.put((self.data, sync_tup, opto_val))
             else:
-                self.queue.put((self.data, sync_tup, 0))
-    
+                q_tup = (self.data, sync_tup, 0)
+                self.queue.put(q_tup)
+
     def close(self):
         self.animator_exit_event.set()
         self.queue.close()
         self.queue.cancel_join_thread()
 
-from time import sleep
-def test(exit):
-    ii = 0
-    while not exit.is_set():
-        print(ii)
-        sleep(0.1)
-        ii += 1
-    return
 
-def animated_plot_process(thermistor_queue, n_samples, fs, exit_event):
+def animated_plot_process(thermistor_queue, fs, exit_event, n_samples=100, ylims=(0, 1023)):
     matplotlib.use('Qt5Agg')
-    
+
     # prep data vector
     frame_num = 0
     data = np.zeros((n_samples,))
+    queue_size_readable = True
 
     # make a new figure
     fig, ax = plt.subplots()
     # add a line
     (ln,) = ax.plot(np.arange(n_samples), data, animated=True)
-    ax.set_xlim((0,n_samples))
-    ax.set_ylim((0,1023))
+    ax.set_xlim((0, n_samples))
+    ax.set_ylim(ylims)
+    tic = time.time()
 
     # add text annotation
     fr_number = ax.annotate(
@@ -201,43 +212,43 @@ def animated_plot_process(thermistor_queue, n_samples, fs, exit_event):
         # Will raise the "empty" exception if it's empty, or the ValueError exception if it's closed.
         try:
             data = thermistor_queue.get(block=False)  # tuple of (therm yvals, sync led state, opto), or empty if end
-            frame_num += 1
-        except (Empty, ValueError):
+        except Empty:
+            data = ()
+            pass
+        except ValueError:
             data = ()
             pass
 
-        if len(data)==0:
+        if len(data) == 0:
             pass
         else:
             ln.set_ydata(data[0])
-            fr_number.set_text(
-                "approx time (sec): {j}    \
-                sync: {l1} {l2} {l3} {l4}    \
-                queue sz: {qs}".format(
-                    j=int(frame_num/fs), 
-                    l1=data[1][0],
-                    l2=data[1][1],
-                    l3=data[1][2], 
-                    l4=data[1][3],
-                    qs=thermistor_queue.qsize(),
-                    )
-            )
+            if (time.time() - tic) > 1:
+                time_txt = f"approx time (sec): {time.time() - tic:.2f}"
+            led_txt = f"sync: {data[1]}"
+            if queue_size_readable:
+                try:
+                    queue_txt = f"queue sz: {thermistor_queue.qsize()}"
+                except NotImplementedError:
+                    queue_txt = "queue sz: (not implemented)"
+                queue_size_readable = False
+            fr_number.set_text("    ".join([time_txt, led_txt, queue_txt]))
             if data[2]:
                 ln.set_color('C1')
             else:
                 ln.set_color('C0')
             bm.update()
-    
+
     plt.close(fig)
 
-def main_from_ipynb(data_queue, n_samples, fs, exit_event):
+
+def main_from_ipynb(data_queue, fs, exit_event, **kwargs):
     """Open a blitting animate process from a jupyter notebook
     """
-    
-    animate_process = Process(target=animated_plot_process, args=(data_queue, n_samples, fs, exit_event))
+    animate_process = Process(target=animated_plot_process, args=(data_queue, fs, exit_event), kwargs=kwargs)
     return animate_process
-    
-            
+
+
 def main():
     """Testing function.
     """
@@ -246,7 +257,7 @@ def main():
     animate_process = Process(target=animated_plot_process, args=(data_queue, n_samples))
     animate_process.start()
 
-    for j in range(100):
+    for _ in range(100):
         data = np.random.random((n_samples,))
         t1 = time.time()
         data_queue.put(data)
