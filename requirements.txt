@@ -1,0 +1,6 @@
+cv2
+jupyter
+matplotlib
+numpy
+opencv-python
+pyk4a
